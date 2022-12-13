@@ -1,2 +1,2 @@
 # merkle-tree
-Merkle tree implementation
+Generates a Merkle tree for given file
