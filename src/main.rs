@@ -31,7 +31,11 @@ pub fn generate_leaves(data: Vec<u8>) -> Result<Vec<Node>, Error> {
     #[allow(unused_assignments)]
     let mut last_two = Vec::new();
 
-    if data_chunks.len() > 1 && data_chunks.last().unwrap().len() < MIN_CHUNK_SIZE {
+    let Some(last) = data_chunks.last() else {
+        return Err(Error::NotFound);
+    };
+
+    if data_chunks.len() > 1 && last.len() < MIN_CHUNK_SIZE {
         last_two = data_chunks.split_off(data_chunks.len() - 2).concat();
         let chunk_size = last_two.len() / 2 + (last_two.len() % 2 != 0) as usize;
         data_chunks.append(&mut last_two.chunks(chunk_size).collect::<Vec<&[u8]>>());
@@ -54,7 +58,10 @@ pub fn build_layer(nodes: Vec<Node>) -> Result<Vec<Node>, Error> {
     let mut nodes_iter = nodes.into_iter();
     while let Some(left) = nodes_iter.next() {
         if let Some(right) = nodes_iter.next() {
-            layer.push(hash_branch(left, right).unwrap());
+            let Ok(node) = hash_branch(left, right) else {
+                return Err(Error::CouldNotHash)
+            };
+            layer.push(node);
         } else {
             layer.push(left);
         }
@@ -73,9 +80,12 @@ pub fn hash_branch(left: Node, right: Node) -> Result<Node, Error> {
 
 pub fn generate_data_root(mut nodes: Vec<Node>) -> Result<Node, Error> {
     while nodes.len() > 1 {
-        nodes = build_layer(nodes).unwrap();
+        nodes = match build_layer(nodes) {
+            Ok(nodes) => nodes,
+            Err(err) => return Err(err),
+        }
     }
-    let root = nodes.pop().unwrap();
+    let root = nodes.pop().expect("No node present");
     Ok(root)
 }
 
