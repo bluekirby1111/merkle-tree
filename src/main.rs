@@ -1,5 +1,6 @@
 use consts::{MAX_CHUNK_SIZE, MIN_CHUNK_SIZE};
 use error::Error;
+use hash::hash_all_sha256;
 use types::Node;
 
 use crate::hash::sha256;
@@ -28,7 +29,7 @@ pub fn generate_leaves(data: Vec<u8>) -> Result<Vec<Node>, Error> {
     let mut leaves = Vec::<Node>::new();
     for chunk in data_chunks.into_iter() {
         leaves.push(Node {
-            hash: Some(sha256(chunk)),
+            hash: sha256(chunk),
             left: None,
             right: None,
         })
@@ -37,11 +38,33 @@ pub fn generate_leaves(data: Vec<u8>) -> Result<Vec<Node>, Error> {
     Ok(leaves)
 }
 
+pub fn build_layer(nodes: Vec<Node>) -> Result<Vec<Node>, Error> {
+    let mut layer = Vec::<Node>::with_capacity(nodes.len() / 2 + (nodes.len() % 2 != 0) as usize);
+    let mut nodes_iter = nodes.into_iter();
+    while let Some(left) = nodes_iter.next() {
+        if let Some(right) = nodes_iter.next() {
+            layer.push(hash_branch(left, right).unwrap());
+        } else {
+            layer.push(left);
+        }
+    }
+    Ok(layer)
+}
+
+pub fn hash_branch(left: Node, right: Node) -> Result<Node, Error> {
+    let hash = hash_all_sha256(vec![&left.hash, &right.hash]);
+    Ok(Node {
+        hash,
+        left: Some(Box::new(left)),
+        right: Some(Box::new(right)),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
 
-    use crate::{error::Error, generate_leaves, types::Node};
+    use crate::{build_layer, error::Error, generate_leaves, types::Node};
 
     const ONE_MB_BINARY: &str = "res/1mb.bin";
 
@@ -54,13 +77,28 @@ mod tests {
         assert_eq!(
             leaves[1],
             Node {
-                hash: Some([
+                hash: [
                     138, 57, 210, 171, 211, 153, 154, 183, 60, 52, 219, 36, 118, 132, 156, 221,
                     243, 3, 206, 56, 155, 53, 130, 104, 80, 249, 167, 0, 88, 155, 74, 144
-                ]),
+                ],
                 left: None,
                 right: None
             }
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn should_build_layer_correctly() -> Result<(), Error> {
+        let data = fs::read(ONE_MB_BINARY).unwrap();
+        let leaves: Vec<Node> = generate_leaves(data).unwrap();
+        let layer = build_layer(leaves).unwrap();
+        assert_eq!(
+            layer[0].hash,
+            [
+                145, 252, 102, 63, 105, 86, 215, 195, 99, 148, 156, 153, 108, 133, 84, 33, 183,
+                193, 195, 63, 31, 184, 3, 202, 117, 86, 21, 85, 217, 148, 216, 103
+            ]
         );
         Ok(())
     }
