@@ -2,10 +2,9 @@ use std::{env, fs};
 
 use consts::{MAX_CHUNK_SIZE, MIN_CHUNK_SIZE};
 use error::Error;
-use hash::hash_all_sha256;
-use types::Node;
+use types::{Node, Tree};
 
-use crate::hash::sha256;
+use crate::{hash::sha256, types::MutableTree};
 
 pub mod consts;
 pub mod error;
@@ -17,15 +16,15 @@ fn main() {
     let path = args[1].clone();
     match fs::read(path.clone()) {
         Ok(data) => {
-            let leaves: Vec<Node> = generate_leaves(data).unwrap();
-            let root = generate_data_root(leaves).unwrap();
+            let tree = generate_leaves(data, Tree::new(sha256)).unwrap();
+            let root = calculate_root(tree).unwrap();
             println!("File merkle tree root: {:?}", root.hash);
         }
         Err(err) => println!("Error reading {} file: {}", path.clone(), err.to_string()),
     }
 }
 
-pub fn generate_leaves(data: Vec<u8>) -> Result<Vec<Node>, Error> {
+pub fn generate_leaves(data: Vec<u8>, mut tree: Tree) -> Result<Tree, Error> {
     let mut data_chunks: Vec<&[u8]> = data.chunks(MAX_CHUNK_SIZE).collect();
 
     #[allow(unused_assignments)]
@@ -41,24 +40,23 @@ pub fn generate_leaves(data: Vec<u8>) -> Result<Vec<Node>, Error> {
         data_chunks.append(&mut last_two.chunks(chunk_size).collect::<Vec<&[u8]>>());
     }
 
-    let mut leaves = Vec::<Node>::new();
     for chunk in data_chunks.into_iter() {
-        leaves.push(Node {
+        tree.insert_leaf(Node {
             hash: sha256(chunk),
             left: None,
             right: None,
         })
     }
 
-    Ok(leaves)
+    Ok(tree)
 }
 
-pub fn build_layer(nodes: Vec<Node>) -> Result<Vec<Node>, Error> {
+pub fn build_layer(tree: &Tree, nodes: Vec<Node>) -> Result<Vec<Node>, Error> {
     let mut layer = Vec::<Node>::with_capacity(nodes.len() / 2 + (nodes.len() % 2 != 0) as usize);
     let mut nodes_iter = nodes.into_iter();
     while let Some(left) = nodes_iter.next() {
         if let Some(right) = nodes_iter.next() {
-            let Ok(node) = hash_branch(left, right) else {
+            let Ok(node) = hash_branch(tree, left, right) else {
                 return Err(Error::CouldNotHash)
             };
             layer.push(node);
@@ -69,8 +67,11 @@ pub fn build_layer(nodes: Vec<Node>) -> Result<Vec<Node>, Error> {
     Ok(layer)
 }
 
-pub fn hash_branch(left: Node, right: Node) -> Result<Node, Error> {
-    let hash = hash_all_sha256(vec![&left.hash, &right.hash]);
+pub fn hash_branch(tree: &Tree, left: Node, right: Node) -> Result<Node, Error> {
+    let left_hash = tree.hash(&left.hash);
+    let right_hash = tree.hash(&right.hash);
+
+    let hash = tree.hash(&[left_hash, right_hash].concat());
     Ok(Node {
         hash,
         left: Some(Box::new(left)),
@@ -78,9 +79,10 @@ pub fn hash_branch(left: Node, right: Node) -> Result<Node, Error> {
     })
 }
 
-pub fn generate_data_root(mut nodes: Vec<Node>) -> Result<Node, Error> {
+pub fn calculate_root(tree: Tree) -> Result<Node, Error> {
+    let mut nodes = tree.leaves.clone();
     while nodes.len() > 1 {
-        nodes = match build_layer(nodes) {
+        nodes = match build_layer(&tree, nodes) {
             Ok(nodes) => nodes,
             Err(err) => return Err(err),
         }
@@ -93,18 +95,24 @@ pub fn generate_data_root(mut nodes: Vec<Node>) -> Result<Node, Error> {
 mod tests {
     use std::fs;
 
-    use crate::{build_layer, error::Error, generate_data_root, generate_leaves, types::Node};
+    use crate::{
+        build_layer, calculate_root,
+        error::Error,
+        generate_leaves,
+        hash::sha256,
+        types::{MutableTree, Node, Tree},
+    };
 
     const ONE_MB_BINARY: &str = "res/1mb.bin";
 
     #[test]
     fn should_generate_leaves_correctly() -> Result<(), Error> {
         let data = fs::read(ONE_MB_BINARY).unwrap();
-        let leaves = generate_leaves(data).unwrap();
+        let tree = generate_leaves(data, Tree::new(sha256)).unwrap();
 
-        assert_eq!(leaves.len(), 4);
+        assert_eq!(tree.leaves.len(), 4);
         assert_eq!(
-            leaves[1],
+            tree.leaves[1],
             Node {
                 hash: [
                     138, 57, 210, 171, 211, 153, 154, 183, 60, 52, 219, 36, 118, 132, 156, 221,
@@ -120,8 +128,8 @@ mod tests {
     #[test]
     fn should_build_layer_correctly() -> Result<(), Error> {
         let data = fs::read(ONE_MB_BINARY).unwrap();
-        let leaves: Vec<Node> = generate_leaves(data).unwrap();
-        let layer = build_layer(leaves).unwrap();
+        let tree = generate_leaves(data, Tree::new(sha256)).unwrap();
+        let layer = build_layer(&tree, tree.leaves.clone()).unwrap();
         assert_eq!(
             layer[0].hash,
             [
@@ -135,8 +143,8 @@ mod tests {
     #[test]
     fn should_generate_root() -> Result<(), Error> {
         let data = fs::read(ONE_MB_BINARY).unwrap();
-        let leaves: Vec<Node> = generate_leaves(data).unwrap();
-        let root = generate_data_root(leaves).unwrap();
+        let tree = generate_leaves(data, Tree::new(sha256)).unwrap();
+        let root = calculate_root(tree).unwrap();
         assert_eq!(
             root.hash,
             [
@@ -150,9 +158,8 @@ mod tests {
     #[test]
     fn test_valid_root_small_last_chunk() -> Result<(), Error> {
         let data = vec![0; 256 * 1024 + 1];
-        // root id as calculate by arweave-js
-        let leaves: Vec<Node> = generate_leaves(data).unwrap();
-        let root = generate_data_root(leaves).unwrap();
+        let tree = generate_leaves(data, Tree::new(sha256)).unwrap();
+        let root = calculate_root(tree).unwrap();
         assert_eq!(
             root.hash,
             [
