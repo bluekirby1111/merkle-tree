@@ -1,6 +1,6 @@
 use std::{env, fs};
 
-use consts::{MAX_CHUNK_SIZE, MIN_CHUNK_SIZE};
+use consts::{HASH_SIZE, MAX_CHUNK_SIZE, MIN_CHUNK_SIZE};
 use error::Error;
 use types::{Node, Tree};
 
@@ -87,8 +87,24 @@ pub fn calculate_root(tree: Tree) -> Result<Node, Error> {
             Err(err) => return Err(err),
         }
     }
-    let root = nodes.pop().expect("No node present");
-    Ok(root)
+    match nodes.pop() {
+        Some(node) => Ok(node),
+        None => Err(Error::CouldNotHash),
+    }
+}
+
+pub fn find_opening(tree: Tree, index: usize) -> [[u8; HASH_SIZE]; 2] {
+    let (left_leaves, right_leaves) = tree.leaves.split_at(index);
+
+    let mut left_tree = Tree::new(sha256);
+    left_tree.insert_leaves(left_leaves.to_vec());
+    let mut right_tree = Tree::new(sha256);
+    right_tree.insert_leaves(right_leaves.to_vec());
+
+    let left_tree_root = calculate_root(left_tree).unwrap_or_default();
+    let right_tree_root = calculate_root(right_tree).unwrap_or_default();
+
+    [left_tree_root.hash, right_tree_root.hash]
 }
 
 #[cfg(test)]
@@ -98,7 +114,7 @@ mod tests {
     use crate::{
         build_layer, calculate_root,
         error::Error,
-        generate_leaves,
+        find_opening, generate_leaves,
         hash::sha256,
         types::{MutableTree, Node, Tree},
     };
@@ -165,6 +181,27 @@ mod tests {
             [
                 145, 70, 225, 176, 161, 147, 24, 22, 11, 251, 142, 150, 71, 235, 137, 126, 212, 15,
                 12, 235, 176, 115, 164, 63, 203, 170, 102, 24, 219, 217, 174, 74
+            ]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn should_find_opening() -> Result<(), Error> {
+        let data = fs::read(ONE_MB_BINARY).unwrap();
+        let tree = generate_leaves(data, Tree::new(sha256)).unwrap();
+        let opening = find_opening(tree, 1);
+        assert_eq!(
+            opening,
+            [
+                [
+                    138, 57, 210, 171, 211, 153, 154, 183, 60, 52, 219, 36, 118, 132, 156, 221,
+                    243, 3, 206, 56, 155, 53, 130, 104, 80, 249, 167, 0, 88, 155, 74, 144
+                ],
+                [
+                    34, 175, 149, 60, 99, 192, 81, 183, 12, 141, 75, 122, 35, 190, 185, 11, 208,
+                    48, 144, 2, 7, 161, 120, 45, 221, 17, 106, 102, 150, 84, 13, 27
+                ]
             ]
         );
         Ok(())
