@@ -42,7 +42,7 @@ pub fn generate_leaves(data: Vec<u8>, mut tree: Tree) -> Result<Tree, Error> {
 
     for chunk in data_chunks.into_iter() {
         tree.insert_leaf(Node {
-            hash: sha256(chunk),
+            hash: tree.hash(chunk),
             left: None,
             right: None,
         })
